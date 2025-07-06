@@ -1,21 +1,23 @@
 #!/bin/bash
 
 # Script tự động tạo các tmux session và chạy lệnh nexus-network start với node ID riêng
+# Sửa lỗi: Xử lý lỗi HTML từ curl, bảo vệ script gốc
 # Tính năng:
-# - Đọc node IDs từ tệp node_ids.txt (tạo mẫu nếu chưa có)
-# - Tự động cài đặt tmux, bc, nexus-network nếu cần
-# - Kiểm tra tải CPU thông minh với timeout
-# - Hỗ trợ tùy chỉnh qua biến môi trường và tham số dòng lệnh
-# - Log chi tiết vào thư mục logs/
+# - Đọc node IDs từ tệp node_ids.txt
+# - Tự động cài đặt tmux, bc, nexus-network
+# - Kiểm tra tải CPU thông minh
+# - Hỗ trợ tùy chỉnh qua biến môi trường
+# - Log chi tiết vào logs/
 
 # Cấu hình mặc định
 : "${LOAD_THRESHOLD:=2.0}"  # Ngưỡng tải CPU
-: "${TIMEOUT_SECONDS:=30}"  # Thời gian chờ tối đa khi tải cao
+: "${TIMEOUT_SECONDS:=30}"  # Thời gian chờ tối đa
 : "${TMUX_SESSION:=nexus-nodes}"  # Tên session tmux
-: "${NODE_IDS_FILE:=node_ids.txt}"  # Tệp chứa node IDs
-: "${LOG_DIR:=logs}"  # Thư mục lưu log
-: "${VERBOSE_LOG:=1}"  # 1: log chi tiết, 0: log ngắn gọn
+: "${NODE_IDS_FILE:=node_ids.txt}"  # Tệp node IDs
+: "${LOG_DIR:=logs}"  # Thư mục log
+: "${VERBOSE_LOG:=1}"  # 1: log chi tiết, 0: ngắn gọn
 : "${CHECK_LOAD:=1}"  # 1: kiểm tra tải CPU, 0: bỏ qua
+NEXUS_URL="https://cli.nexus.xyz/"  # URL cài đặt nexus-network
 
 # Khởi tạo log
 mkdir -p "$LOG_DIR" || { echo "Lỗi: Không thể tạo thư mục $LOG_DIR"; exit 1; }
@@ -62,14 +64,37 @@ validate_node_id() {
     return 0
 }
 
+# Hàm kiểm tra phản hồi curl
+check_curl_response() {
+    local url=$1 output_file=$2
+    # Kiểm tra mã HTTP
+    local http_code=$(curl -s -o "$output_file" -w "%{http_code}" "$url")
+    if [ "$http_code" -ne 200 ]; then
+        handle_error "Lỗi curl: Nhận mã HTTP $http_code từ $url. Kiểm tra URL hoặc mạng."
+    fi
+    # Kiểm tra nội dung có phải HTML không
+    if grep -qi "<!DOCTYPE html" "$output_file"; then
+        handle_error "Lỗi curl: Phản hồi từ $url là HTML, không phải script. Kiểm tra URL hoặc server."
+    fi
+}
+
 # Kiểm tra môi trường
 install_package "tmux" "sudo apt update && sudo apt install -y tmux"
 install_package "bc" "sudo apt update && sudo apt install -y bc"
 if ! command -v nexus-network &> /dev/null; then
     log "INFO" "Đang cài đặt nexus-network CLI..."
-    if ! curl https://cli.nexus.xyz/ | sh; then
-        handle_error "Không thể cài đặt nexus-network CLI. Kiểm tra kết nối mạng hoặc cài đặt thủ công bằng 'curl https://cli.nexus.xyz/ | sh'."
+    TEMP_SCRIPT="/tmp/nexus_install_$$.sh"
+    # Tải và kiểm tra script cài đặt
+    check_curl_response "$NEXUS_URL" "$TEMP_SCRIPT"
+    # Đảm bảo tệp có quyền thực thi
+    chmod +x "$TEMP_SCRIPT" || handle_error "Không thể cấp quyền thực thi cho $TEMP_SCRIPT."
+    # Thực thi script cài đặt
+    if ! sh "$TEMP_SCRIPT"; then
+        rm -f "$TEMP_SCRIPT"
+        handle_error "Không thể cài đặt nexus-network CLI. Kiểm tra kết nối mạng hoặc cài đặt thủ công bằng 'curl $NEXUS_URL | sh'."
     fi
+    rm -f "$TEMP_SCRIPT"
+    # Kiểm tra lại
     if ! command -v nexus-network &> /dev/null; then
         handle_error "nexus-network CLI vẫn không khả dụng sau khi cài đặt."
     fi
