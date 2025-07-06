@@ -11,7 +11,7 @@ LOG_FILE="nexus_network_start_$(date +%F_%H-%M-%S).log"
 
 # Danh sách node IDs
 node_ids=(
-11817537 12261490
+11817537
 )
 
 # Ghi log
